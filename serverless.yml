@@ -1,0 +1,135 @@
+service: timewarp-lol
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs18.x
+  region: us-east-1
+  stage: ${opt:stage, 'dev'}
+  environment:
+    RIOT_API_KEY: ${env:RIOT_API_KEY}
+    DYNAMODB_MATCHES_TABLE: ${self:service}-${self:provider.stage}-matches
+    DYNAMODB_PLAYERS_TABLE: ${self:service}-${self:provider.stage}-players
+    DYNAMODB_INSIGHTS_TABLE: ${self:service}-${self:provider.stage}-insights
+    S3_DATA_BUCKET: ${self:service}-${self:provider.stage}-data
+    S3_IMAGES_BUCKET: ${self:service}-${self:provider.stage}-images
+    BEDROCK_MODEL_ID: anthropic.claude-3-5-sonnet-20241022-v2:0
+
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - dynamodb:Query
+        - dynamodb:Scan
+        - dynamodb:GetItem
+        - dynamodb:PutItem
+        - dynamodb:UpdateItem
+        - dynamodb:DeleteItem
+      Resource:
+        - arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.DYNAMODB_MATCHES_TABLE}
+        - arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.DYNAMODB_PLAYERS_TABLE}
+        - arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.DYNAMODB_INSIGHTS_TABLE}
+
+    - Effect: Allow
+      Action:
+        - s3:GetObject
+        - s3:PutObject
+        - s3:DeleteObject
+      Resource:
+        - arn:aws:s3:::${self:provider.environment.S3_DATA_BUCKET}/*
+        - arn:aws:s3:::${self:provider.environment.S3_IMAGES_BUCKET}/*
+
+    - Effect: Allow
+      Action:
+        - bedrock:InvokeModel
+      Resource:
+        - arn:aws:bedrock:${self:provider.region}::foundation-model/${self:provider.environment.BEDROCK_MODEL_ID}
+
+functions:
+  generateReview:
+    handler: api/serverless-handler.generateReview
+    timeout: 300
+    events:
+      - http:
+          path: api/generate-review
+          method: post
+          cors: true
+
+resources:
+  Resources:
+    MatchesTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.DYNAMODB_MATCHES_TABLE}
+        AttributeDefinitions:
+          - AttributeName: matchId
+            AttributeType: S
+          - AttributeName: puuid
+            AttributeType: S
+        KeySchema:
+          - AttributeName: matchId
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: puuid-index
+            KeySchema:
+              - AttributeName: puuid
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+            ProvisionedThroughput:
+              ReadCapacityUnits: 5
+              WriteCapacityUnits: 5
+        ProvisionedThroughput:
+          ReadCapacityUnits: 5
+          WriteCapacityUnits: 5
+
+    PlayersTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.DYNAMODB_PLAYERS_TABLE}
+        AttributeDefinitions:
+          - AttributeName: puuid
+            AttributeType: S
+        KeySchema:
+          - AttributeName: puuid
+            KeyType: HASH
+        ProvisionedThroughput:
+          ReadCapacityUnits: 5
+          WriteCapacityUnits: 5
+
+    InsightsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.DYNAMODB_INSIGHTS_TABLE}
+        AttributeDefinitions:
+          - AttributeName: playerId
+            AttributeType: S
+          - AttributeName: year
+            AttributeType: N
+        KeySchema:
+          - AttributeName: playerId
+            KeyType: HASH
+          - AttributeName: year
+            KeyType: RANGE
+        ProvisionedThroughput:
+          ReadCapacityUnits: 5
+          WriteCapacityUnits: 5
+
+    DataBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:provider.environment.S3_DATA_BUCKET}
+
+    ImagesBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:provider.environment.S3_IMAGES_BUCKET}
+        PublicAccessBlockConfiguration:
+          BlockPublicAcls: false
+          BlockPublicPolicy: false
+          IgnorePublicAcls: false
+          RestrictPublicBuckets: false
+
+plugins:
+  - serverless-plugin-typescript
+  - serverless-offline
